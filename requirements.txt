@@ -1,1 +1,1 @@
-python-fsmsock
+https://github.com/ya-mouse/python-fsmsock/archive/master.zip#egg=python-fsmsock
