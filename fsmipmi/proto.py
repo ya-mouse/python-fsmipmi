@@ -184,10 +184,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
             return False
 
         if self._recv(payload):
-            # We're done
-#            self.stop()
             return True
 
+        # We're done
+        self.stop()
         return False
 
     def _checksum(self, data): # Two's complement over the data
@@ -299,7 +299,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
     def _process_next_cmd(self):
         self._recv = self._got_next_cmd
         cmd = self.cmds[self._cmdidx]
-#        self._l.debug("%s: RAW command %s %s" % (self._host, self._cmdidx, cmd))
+#        self._l.debug("{0}: RAW command {1} {2}".format(self._host, self._cmdidx, cmd))
         return self._send_ipmi_net_payload(cmd[1], cmd[2], cmd[3])
 
     def _sdr_is_valid(self, resp):
