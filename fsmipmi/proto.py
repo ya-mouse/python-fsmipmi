@@ -63,7 +63,6 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._padval = tuple(range(1, 16))
         self._cmdidx = 0
         self.cmds = []
-        self._value = lambda x,y,z: None
         super().__init__(host, interval, port=623)
 
     def _initsession(self):
