@@ -869,3 +869,6 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._send = self._get_channel_auth_cap
         self._recv = None
         self._args = []
+
+    def _value(self, point, val, tm):
+        pass
