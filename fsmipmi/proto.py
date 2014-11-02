@@ -53,7 +53,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
     PAYLOAD_RAKP3 = 0x14
     PAYLOAD_RAKP4 = 0x15
 
-    def __init__(self, host, interval, user='ADMIN', passwd='ADMIN'):
+    def __init__(self, host, interval, user='ADMIN', passwd='ADMIN', cmds=[], vendors={}, sdrs=()):
         self._userid = bytes(user, 'ascii')
         self._useridb = unpack('%dB' % len(self._userid), self._userid)
         self._passwd = bytes(passwd, 'ascii')
@@ -62,7 +62,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._recv = None
         self._padval = tuple(range(1, 16))
         self._cmdidx = 0
-        self.cmds = []
+        self._cmds = cmds
+        self._sdrs = sdrs
+        self._vendors = vendors
         super().__init__(host, interval, port=623)
 
     def _initsession(self):
@@ -90,7 +92,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._rqaddr = 0x81 # per IPMI table 5-4, software ids in the ipmi spec may
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
-        self._define_commands()
+        self._cmdidx = 0
 
     def send_buf(self):
 #        self._l.debug("SEND BUF %s", self._send)
@@ -212,139 +214,40 @@ class IpmiUdpClient(proto.base.UdpTransport):
 #        self._l.debug("IPMI: %02X %02X [%s]" % (netfn, command, reqbody))
         return header
 
-    sdrs = {
-        'TEMP_CPU0': 'temp.cpu0',
-        'TEMP_CPU1': 'temp.cpu1',
-        'CPU1 TEMP': 'temp.cpu0',
-        'CPU2 TEMP': 'temp.cpu1',
-        'CPU0': 'temp.cpu0',
-        'CPU1': 'temp.cpu1',
-        'FAN1': 'fan.1',
-        'FAN2': 'fan.2',
-        'FAN3': 'fan.3',
-        'FAN4': 'fan.4',
-        'FAN5': 'fan.5',
-        'FAN6': 'fan.6',
-        'FAN7': 'fan.7',
-        'FAN8': 'fan.8',
-        'FAN9': 'fan.9',
-        'FAN10': 'fan.10',
-        'FAN11': 'fan.11',
-        'FAN12': 'fan.12',
-        'FAN13': 'fan.13',
-        'FAN14': 'fan.14',
-        'FAN15': 'fan.15',
-        'FAN16': 'fan.16',
-        'FAN17': 'fan.17',
-        'FAN18': 'fan.18',
-        'FAN19': 'fan.19',
-        'FAN20': 'fan.20',
-        'FAN21': 'fan.21',
-        'FAN22': 'fan.22',
-        'FAN23': 'fan.23',
-        'FAN24': 'fan.24',
-        'FAN25': 'fan.25',
-        'FAN26': 'fan.26',
-        'FAN27': 'fan.27',
-        'FAN28': 'fan.28',
-        'FAN29': 'fan.29',
-        'FAN30': 'fan.30',
-        'FAN31': 'fan.31',
-        'FAN32': 'fan.32',
-        'FAN33': 'fan.33',
-        'FAN34': 'fan.34',
-        'FAN35': 'fan.35',
-        'FAN36': 'fan.36',
-        'INLET': 'temp.inlet',
-        'OUTLET': 'temp.outlet',
-        'NODE_WATT': 'power.W',
-        'UP_RACK_POWER': 'rack.power.up',
-        'LOW_RACK_POWER': 'rack.power.low',
-        'ALL_RACK_POWER': 'rack.power.all',
-        'INLET_TEMP_UP': 'rack.temp.inlet-up',
-        'INLET_TEMP_LOW': 'rack.temp.inlet-low',
-        'OUTLET_UR_UP': 'rack.temp.outlet-ur-up',
-        'OUTLET_UR_LOW': 'rack.temp.outlet-ur-low',
-        'OUTLET_LR_UP': 'rack.temp.outlet-lr-up',
-        'OUTLET_LR_LOW': 'rack.temp.outlet-lr-low',
-        'PSU_INPUT_POWER': 'power.W',
-    }
-
     sdr_types = ( 0x01, 0x04, 0x08 )
-
-    def _define_commands(self):
-        self._cmdidx = 0
-
-        self.cmds = [
-            ( 'power.on', 0x00, 0x01, (), self._cmd_got_poweron ),
-        ]
-
-        self.ven = {
-            (0, 0) : ( ( 'power.W', 0x04, 0x2d, (0x66,), self._cmd_got_watt2 ), ),
-            (42385, 1) : ( ( 'rack.power.fans-up', 0x36, 0xaa, (0x1,), self._cmd_got_watt_aic ),
-                       ( 'rack.power.fans-low', 0x36, 0xaa, (0x2,), self._cmd_got_watt_aic ) ),
-            (10876, 43707) : ( ( 'power.W', 0x30, 0x19, (), self._cmd_got_watt ), ),
-            (10876, 1811) : ( ( 'power.W', 0x30, 0xe2, (), self._cmd_got_watt ), ),
-        }
 
     def _got_next_cmd(self, response):
         tm = self._expire - self._interval
 #        self._l.debug("data:", list(response[5:]))
-        self.cmds[self._cmdidx][4](response, tm)
-        if len(self.cmds) > 0:
-            self._cmdidx = (self._cmdidx + 1) % len(self.cmds)
+        self._cmds[self._cmdidx][4](self, response, tm)
+        if len(self._cmds) > 0:
+            self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
         return not (self._cmdidx == 0)
 
     def _process_next_cmd(self):
         self._recv = self._got_next_cmd
-        cmd = self.cmds[self._cmdidx]
+        cmd = self._cmds[self._cmdidx]
 #        self._l.debug("{0}: RAW command {1} {2}".format(self._host, self._cmdidx, cmd))
         return self._send_ipmi_net_payload(cmd[1], cmd[2], cmd[3])
 
     def _sdr_is_valid(self, resp):
         return resp[6] == 0 and (resp[8] & 0x20) != 0x20 and (resp[8] & 0x40) == 0x40
 
-    def _cmd_got_poweron(self, response, tm):
-#        if not self._sdr_is_valid(response) != 0:
+
+    @staticmethod
+    def _cmd_got_sessinfo(obj, response, tm):
+#        if not obj._sdr_is_valid(response) != 0:
 #            return True
-#        self._l.debug("%s.%s %d %lu" % (self.cmds[self._cmdidx][0], response[7] & 1, tm))
-        self._value(self.cmds[self._cmdidx][0], response[7] & 1, tm)
+#        obj._l.debug("%s %s" % (obj._cmds[obj._cmdidx][0], response[7:]))
+        obj.on_data(obj._cmds[obj._cmdidx][0], response[9] & 1, tm)
         return True
 
-    def _cmd_got_sessinfo(self, response, tm):
-#        if not self._sdr_is_valid(response) != 0:
-#            return True
-#        self._l.debug("%s %s" % (self.cmds[self._cmdidx][0], response[7:]))
-        self._value(self.cmds[self._cmdidx][0], response[9] & 1, tm)
-        return True
-
-    def _cmd_got_watt(self, response, tm):
-#        if not self._sdr_is_valid(response) != 0:
-#            return True
-        val = unpack('<H', response[8:10])[0]
-#        self._l.debug("%s.%s %s %lu" % (self._tag[0], self.cmds[self._cmdidx][0], val, tm))
-        self._value(self.cmds[self._cmdidx][0], val, tm)
-        return True
-
-    def _cmd_got_watt_aic(self, response, tm):
-        val = unpack('<H', response[7:9])[0]
-#        self._l.debug("%s.%s %s %lu" % (self._tag[0], self.cmds[self._cmdidx][0], val, tm))
-        self._value(self.cmds[self._cmdidx][0], val, tm)
-        return True
-
-    def _cmd_got_watt2(self, response, tm):
-        if not self._sdr_is_valid(response) != 0:
+    @staticmethod
+    def _cmd_got_sensor_reading(obj, resp, tm):
+#        obj._l.debug("%s: got READING: %02x %02x V:%x" % (obj._host, resp[6], resp[8], resp[7]))
+        if not obj._sdr_is_valid(resp) != 0:
             return True
-        val = 2 * response[7]
-#        self._l.debug("%s.%s %s %lu" % (self._tag[0], self.cmds[self._cmdidx][0], val, tm))
-        self._value(self.cmds[self._cmdidx][0], val, tm)
-        return True
-
-    def _cmd_got_sensor_reading(self, resp, tm):
-#        self._l.debug("%s: got READING: %02x %02x V:%x" % (self._host, resp[6], resp[8], resp[7]))
-        if not self._sdr_is_valid(resp) != 0:
-            return True
-        t,l,m,b,k2,k1 = self.cmds[self._cmdidx][5:]
+        t,l,m,b,k2,k1 = obj._cmds[obj._cmdidx][5:]
         val = resp[7]
         result = 0.0
         if t == 1:
@@ -356,9 +259,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
             # Oops! This isn't an analog sensor
             return True
         result = ((m * val) + (b * pow(10, k1))) * pow(10, k2)
-#        if self._tag[0] == 'M3.five_sec.locations.RU.FOL-A.testlab.GIGABYTE1.x.120007':
-#        self._l.debug("%s.%s %d %lu" % (self._tag[0], self.cmds[self._cmdidx][0], result, tm))
-        self._value(self.cmds[self._cmdidx][0], result, tm)
+#        obj._l.debug("%s %d %lu" % (obj._cmds[self._cmdidx][0], result, tm))
+        obj.on_data(obj._cmds[obj._cmdidx][0], result, tm)
         return True
 
     def _next_sdr_or_cmd(self):
@@ -386,7 +288,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         # FIXME: sensor number is not supported (id_code=0)
         name = str(record[52:52+size].upper(), 'ascii')
 #        self._l.debug("%s: SDR [%s]" % (self._host, name))
-        x = self.sdrs.get(name, None)
+        x = self._sdrs.get(name, None)
         if not x == None:
             self.sdr = (name, x)
         else:
@@ -398,11 +300,11 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
         mtol = unpack('>H', record[28:30])[0]
         bacc = unpack('>I', record[30:34])[0]
-        self.cmds.append((self.sdr[1], 0x4, 0x2d,
+        self._cmds.append((self.sdr[1], 0x4, 0x2d,
             # number
             (record[11],),
             # callback function
-            self._cmd_got_sensor_reading,
+            IpmiUdpClient._cmd_got_sensor_reading,
             # unit
             record[24] >> 6,
             # linear
@@ -470,9 +372,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def timeouted(self, tm = None):
         rc = super().timeouted(tm)
-        if rc and len(self.cmds) > 0:
+        if rc and len(self._cmds) > 0:
 #             self._l.debug('%s: timeouted (%s) %d!' % (self._tag, self._host, tm))
-             self._cmdidx = (self._cmdidx + 1) % len(self.cmds)
+             self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
         return rc
 
     def _got_product_id(self, response):
@@ -488,13 +390,16 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._mfg  = unpack('<I', response[13:16]+b'\x00')[0]
         self._prod = unpack('<H', response[16:18])[0]
 #        self._l.debug("Ver:", self._ver, "Mfg:", self._mfg, "Prod:", self._prod)
-        cmd = self.ven.get((self._mfg, self._prod))
+        cmd = self._vendors.get((self._mfg, self._prod))
         if cmd != None:
-            self.cmds.extend(cmd)
+            self._cmds.extend(cmd)
         # WRND: extend command list with 'session.info' command
-#        self.cmds.extend((('session.info', 0x06, 0x3d, unpack('!5B', b'\xff' + self._sessionid), self._cmd_got_sessinfo),))
+#        self._cmds.extend((('session.info', 0x06, 0x3d, unpack('!5B', b'\xff' + self._sessionid), IpmiUdpClient._cmd_got_sessinfo),))
 
-        self._send = self._get_sdr_info
+        if len(self._sdrs):
+            self._send = self._get_sdr_info
+        else:
+            self._send = self._process_next_cmd
         self._cmdidx = 0
         return True
 
@@ -505,17 +410,15 @@ class IpmiUdpClient(proto.base.UdpTransport):
     def _got_priv_level(self, response):
         # errstr=get_ipmi_error(response,suffix=mysuffix)
         self._logged = True
-        self._send = self._get_product_id
+        if len(self._vendors) or len(self._sdrs):
+            self._send = self._get_product_id
+        else:
+            self._send = self._process_next_cmd
         return True
 
     def _req_priv_level(self):
         self._recv = self._got_priv_level
         return self._send_ipmi_net_payload(0x6, 0x3b, (self._privlevel,))
-
-    def _relog(self):
-        self._initsession()
-        self._send = self._get_channel_auth_cap
-        return True
 
     def _got_rakp4(self, data):
         if data[16] != self._rmcptag:
@@ -870,5 +773,15 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._recv = None
         self._args = []
 
-    def _value(self, point, val, tm):
+    def disconnect(self):
+        if self._logged:
+            self._send_ipmi_net_payload(0x6, 0x3c, self._sessionid)
+            self._logged = False
+        super().disconnect()
+
+    def _relog(self):
+        self.disconnect()
+        return True
+
+    def on_data(self, point, val, tm):
         pass
