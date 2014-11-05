@@ -62,7 +62,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._recv = None
         self._padval = tuple(range(1, 16))
         self._cmdidx = 0
-        self._cmds = cmds
+        self._cmds = list(cmds)
         self._sdrs = sdrs
         self._vendors = vendors
         super().__init__(host, interval, port=623)
