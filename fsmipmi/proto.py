@@ -226,6 +226,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _process_next_cmd(self):
         self._recv = self._got_next_cmd
+        if not len(self._cmds):
+            return 0
         cmd = self._cmds[self._cmdidx]
 #        self._l.debug("{0}: RAW command {1} {2}".format(self._host, self._cmdidx, cmd))
         return self._send_ipmi_net_payload(cmd[1], cmd[2], cmd[3])
