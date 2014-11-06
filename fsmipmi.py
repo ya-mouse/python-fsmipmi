@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+import sys
+import getopt
+import signal
+import logging
+from struct import pack, unpack
+
+from fsmipmi import proto
+from fsmsock import async
+
+def signal_handler(signal, frame):
+    sys.exit(0)
+
+def _cmd_got_powerstatus(obj, response, tm):
+#        if not obj._sdr_is_valid(response) != 0:
+#            return True
+    obj.on_data(obj._cmds[obj._cmdidx][0], response[7] & 1, tm)
+    return True
+
+def _cmd_got_productid(obj, response, tm):
+    if (response[8] & 0x80) == 1:
+        if (response[12] & 0x02) == 0:
+            builtin_sdr = (response[12] & 0x01) == 1
+
+    devid,devrev,fwver,ipmiver  = unpack('>BBHB', response[7:12])
+    mfg  = unpack('<I', response[13:16]+b'\x00')[0]
+    prod = unpack('<H', response[16:18])[0]
+    print("""Device ID\t\t  : {0}
+Device Revision\t\t  : {1}
+Firmware Revision\t  : {2}
+IPMI Version\t\t  : {3:.1f}
+Manufacturer ID\t\t  : {4}
+Product ID\t\t  : {5} ({5:#x})""".format(devid, devrev,int("%x" % fwver)/100.0,ipmiver,mfg,prod))
+    return True
+
+ipmi_cmds = {
+    'mc info':
+        ( ( 'mc info', 0x06, 0x01, (), _cmd_got_productid ), ),
+}
+
+def main():
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGQUIT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], 'U:H:P:')
+    except getopt.GetoptError as err:
+        print(err)
+        #usage()
+        sys.exit(1)
+
+    opt_host=''
+    opt_user=''
+    opt_passwd=''
+    for o, a in opts:
+        if o == '-U':
+            opt_user = a
+        elif o == '-P':
+            opt_passwd = a
+        elif o == '-H':
+            opt_host = a
+        else:
+            assert False, 'unknown option'
+
+    if not opt_host:
+        sys.exit(1)
+    if not opt_user:
+        sys.exit(2)
+    if not opt_passwd:
+        sys.exit(3)
+
+    cmd = ipmi_cmds.get(' '.join(args))
+    if not cmd:
+        sys.exit(4)
+
+    logger = logging.getLogger('default')
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    fh = logging.FileHandler('/dev/stderr', 'w')
+    fh.setLevel(logging.DEBUG)
+    logger.addHandler(fh)
+
+    fsm = async.FSMSock()
+    udp = proto.IpmiUdpClient(host=opt_host, interval=3.0, user=opt_user, passwd=opt_passwd, cmds=cmd)
+    udp._value = lambda x,y,z: print(x,y,z)
+    fsm.connect(udp)
+
+    while fsm.run():
+       fsm.tick()
+
+if __name__ == '__main__':
+    main()
