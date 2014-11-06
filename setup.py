@@ -18,6 +18,7 @@ setup(
     description='Finite State Machine IPMI library for Python',
     author='Anton D. Kachalov',
     packages=find_packages(),
+    scripts=['fsmipmi.py'],
     platforms='any',
     zip_safe=False,
     include_package_data=True,
