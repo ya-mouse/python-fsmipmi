@@ -84,7 +84,6 @@ def main():
 
     fsm = async.FSMSock()
     udp = proto.IpmiUdpClient(host=opt_host, interval=3.0, user=opt_user, passwd=opt_passwd, cmds=cmd)
-    udp._value = lambda x,y,z: print(x,y,z)
     fsm.connect(udp)
 
     while fsm.run():
