@@ -75,12 +75,11 @@ def main():
     if not cmd:
         sys.exit(4)
 
-    logger = logging.getLogger('default')
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
-    fh = logging.FileHandler('/dev/stderr', 'w')
-    fh.setLevel(logging.DEBUG)
-    logger.addHandler(fh)
+    fh = [
+        logging.FileHandler('/dev/stderr', 'w')
+    ]
+    fh[0].setLevel(logging.DEBUG)
+    logging.basicConfig(format='%(levelname)-8s [%(asctime)s] %(message)s', level=logging.DEBUG, handlers=fh)
 
     fsm = async.FSMSock()
     udp = proto.IpmiUdpClient(host=opt_host, interval=3.0, user=opt_user, passwd=opt_passwd, cmds=cmd)
