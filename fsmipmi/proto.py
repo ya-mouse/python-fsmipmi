@@ -54,6 +54,28 @@ class IpmiUdpClient(proto.base.UdpTransport):
     PAYLOAD_RAKP3 = 0x14
     PAYLOAD_RAKP4 = 0x15
 
+    rmcp_codes = {
+        1: ("Insufficient resources to create new session (wait for existing "
+            "sessions to timeout)"),
+        2: "Invalid Session ID",
+        3: "Invalid payload type",
+        4: "Invalid authentication algorithm",
+        5: "Invalid integrity algorithm",
+        6: "No matching integrity payload",
+        7: "No matching integrity payload",
+        8: "Inactive Session ID",
+        9: "Invalid role",
+        0xa: "Unauthorized role or privilege level requested",
+        0xb: "Insufficient resources to create a session at the requested role",
+        0xc: "Invalid username length",
+        0xd: "Unauthorized name",
+        0xe: "Unauthorized GUID",
+        0xf: "Invalid integrity check value",
+        0x10: "Invalid confidentiality algorithm",
+        0x11: "No Cipher suite match with proposed security algorithms",
+        0x12: "Illegal or unrecognized parameter",
+    }
+
     def __init__(self, host, interval, user='ADMIN', passwd='ADMIN', cmds=[], vendors={}, sdrs=()):
         self._userid = bytes(user, 'ascii')
         self._useridb = unpack('%dB' % len(self._userid), self._userid)
@@ -67,6 +89,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._sdrs = sdrs
         self._vendors = vendors
         super().__init__(host, interval, port=623)
+
+    def __str__(self):
+        return 'IPMI({0},{1},{2},{3})'.format(self._host, self._interval, self._state, self._expire)
 
     def _initsession(self):
         self._logged = False
@@ -94,6 +119,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
         self._cmdidx = 0
+        self._send = self._get_channel_auth_cap
+        self._recv = None
 
     def send_buf(self):
 #        logging.debug("SEND BUF %s", self._send)
@@ -444,8 +471,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 # TODO(jbjohnso) jog my memory to update the comment
                 return False
 
-            logging.warning("%s %s %s %d" % (self._host, self._userid, "err_rakp4", data[17]))
-            # err = rmcp_codes[response[17]]
+            logging.warning("%s %s %s %s" % (self._host, self._userid, "err_rakp4", self.rmcp_codes.get(data[17], 'Unrecognized RMCP code %d' % data[17])))
             return False
 
         localsid = unpack('<I', pack('4B', *data[20:24]))[0]
@@ -489,8 +515,18 @@ class IpmiUdpClient(proto.base.UdpTransport):
             logging.warning("!rmcptag")
             return False
         if data[17] != 0: # response code
-            logging.warning('%s %s %s %s' % (self._host, self._userid, "err_rakp2", data[17]))
-            # err = rmcp_codes[response[17]]
+            if data[17] in (9, 0xd) and self._privlevel == 4:
+                # Here the situation is likely that the peer didn't want
+                # us to use Operator. Degrade to operator and try again
+                self._initsession()
+                self._privlevel = 3
+                return True
+
+            if data[17] == 2: # invalid sessionid 99% of the time means a retry
+                              # scenario invalidated an in-flight transaction
+                return False
+
+            logging.warning('%s %s %s %s' % (self._host, self._userid, "err_rakp2", self.rmcp_codes.get(data[17], 'Unrecognized RMCP code %d' % data[17])))
             # data[17] === 13 -> incorrect password
             self._relog()
             return False
@@ -549,8 +585,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             logging.warning("!rmcptag")
             return False
         if response[17] != 0: # response code
-            logging.warning("%s %s %s %s" % (self._host, self._userid, "err_rmcp",response[17]))
-            # err = rmcp_codes[response[17]]
+            logging.warning("%s %s %s %s" % (self._host, self._userid, "err_rmcp", self.rmcp_codes.get(response[17], 'Unrecognized RMCP code %d' % response[17])))
             # response[17] == 1 --> incorrect password
             self._relog()
             return False
@@ -772,10 +807,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             return False
 
         self._initsession()
-
-        self._send = self._get_channel_auth_cap
-        self._recv = None
-        self._args = []
+        return True
 
     def disconnect(self):
         if self._logged:
