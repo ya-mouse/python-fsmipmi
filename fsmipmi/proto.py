@@ -91,7 +91,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         super().__init__(host, interval, port=623)
 
     def __str__(self):
-        return 'IPMI({0},{1},{2},{3})'.format(self._host, self._interval, self._state, self._expire)
+        return 'IPMI({0},{1},{2})'.format(self._host, self._interval, self._state)
 
     def _initsession(self):
         self._logged = False
@@ -440,6 +440,14 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _got_priv_level(self, response):
         # errstr=get_ipmi_error(response,suffix=mysuffix)
+        if response[6] in (0x80, 0x81) and self._privlevel == 4:
+            logging.warning('{0}: degrade privlevel'.format(self))
+            self._logged = True
+            self._logout()
+            self._initsession()
+            self._privlevel = 3
+            return True
+
         self._logged = True
         if len(self._vendors) or len(self._sdrs):
             self._send = self._get_product_id
@@ -810,10 +818,15 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return True
 
     def disconnect(self):
-        if self._logged:
-            self._send_ipmi_net_payload(0x6, 0x3c, self._sessionid)
-            self._logged = False
+        self._logout()
         super().disconnect()
+
+    def _logout(self):
+        if not self._logged:
+            return
+        logging.debug('{0}: logout'.format(self))
+        self._send_ipmi_net_payload(0x6, 0x3c, self._sessionid)
+        self._logged = False
 
     def _relog(self):
         self.disconnect()
