@@ -1,5 +1,6 @@
 import os
 import logging
+from time import time
 from struct import pack, unpack
 from hashlib import md5
 from random import random
@@ -7,6 +8,7 @@ from Crypto.Cipher import AES
 from Crypto.Hash import HMAC, SHA
 
 from fsmsock import proto
+import traceback
 
 def __generate_crc16_table():
     ''' Generates a crc16 lookup table
@@ -86,14 +88,22 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._padval = tuple(range(1, 16))
         self._cmdidx = 0
         self._cmds = list(cmds)
+        self._cmds_initial = list(cmds)
         self._sdrs = sdrs
+        self._sdr_cached = False
+        self._sdr_cmds = []
         self._vendors = vendors
+        self._aeskey = None
         super().__init__(host, interval, port=623)
 
     def __str__(self):
-        return 'IPMI({0},{1},{2})'.format(self._host, self._interval, self._state)
+        return 'IPMI({0} {1} {2})'.format(self._host, len(self._cmds), self._aeskey)
 
     def _initsession(self):
+        del self._cmds
+        self._cmds = list(self._cmds_initial)
+        self._cmdidx = 0
+        self._cycles = 0
         self._logged = False
         self.__random = ()
         self._localsid = unpack('>I', b'YNDX')[0]-1
@@ -106,6 +116,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._rmcptag = 1
         self._sessionid = b'\x00'*4
         self._authtype = 0
+        self._lastpayload = None
         self._seqlun = 0
         self._sequencenumber = 0
         self._ipmiversion = 1.5
@@ -114,19 +125,27 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._mfg = -1
         self._prod = -1
         self._builtin_sdr = False
-        self._sdr_cached = False
         self._rqaddr = 0x81 # per IPMI table 5-4, software ids in the ipmi spec may
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
         self._cmdidx = 0
         self._send = self._get_channel_auth_cap
         self._recv = None
+        self._oldpayload = None
+        self._unord = False
 
     def send_buf(self):
 #        logging.debug("SEND BUF %s", self._send)
         if self._send != None:
             return self._send()
         return 0
+
+    def on_unorder(self, data):
+        if self._oldpayload:
+            logging.debug('{4} OLDLOAD: netfn={0:x} cmd={1:x} code={2:x} {3}'.format(self._oldpayload[1] >> 2, self._oldpayload[5], self._oldpayload[6], self._oldpayload, self))
+        logging.debug('{2} UNORDER: {1} {0}'.format(data, self._aeskey, self))
+        self._unord = True
+        return self.process_data(data)
 
     def process_data(self, data, tm = None):
         self._retries = 0
@@ -150,6 +169,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 # legitimate issues, it's the vendor's fault
                 return False
             if self._sessionid != data[9:13]:
+                logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
                 return False
             if data[4] == 0x02:
                 authcode = data[13:29]
@@ -181,13 +201,16 @@ class IpmiUdpClient(proto.base.UdpTransport):
                     encrypted = 1
                 authcode = data[-12:]
                 if self._k1 == None:
+                    logging.warning("{0}: _k1 == None. Relog.".format(self))
                     self._relog()
                     return False
                 expectedauthcode = HMAC.new(self._k1, data[4:-12], SHA).digest()[:12]
                 if authcode != expectedauthcode:
+                    logging.debug("{0}: AUTH {1} != {2}".format(self, expectedauthcode, authcode))
                     return False #BMC failed to assure integrity to us, drop it
                 sid = unpack('<I', data[6:10])[0]
                 if sid != self._localsid: #session id mismatch, drop it
+                    logging.debug("{0}: SID {1} != {2}".format(self, self._localsid, sid))
                     return False
                 #remseqnumber = unpack('<I',rawdata[10:14])[0]
                 #if (hasattr(self,'remseqnumber') and 
@@ -209,6 +232,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._seqlun += 4
         self._seqlun &= 0xff
 
+        if self._unord:
+            if self._oldpayload:
+                logging.debug('{4} OLDPAYLOAD: netfn={0:x} cmd={1:x} code={2:x} {3}'.format(self._oldpayload[1] >> 2, self._oldpayload[5], self._oldpayload[6], self._oldpayload, self))
+            logging.debug('{4} NEWPAYLOAD: netfn={0:x} cmd={1:x} code={2:x} {3}'.format(payload[1] >> 2, payload[5], payload[6], payload, self))
+            self._unord = False
+        self._oldpayload = payload
         if self._recv == None:
             return False
 
@@ -216,8 +245,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             return True
 
         # We're done
-        self.stop()
-        return False
+        return self.stop()
 
     def _checksum(self, data): # Two's complement over the data
         csum = sum(data)
@@ -245,11 +273,13 @@ class IpmiUdpClient(proto.base.UdpTransport):
     sdr_types = ( 0x01, 0x04, 0x08 )
 
     def _got_next_cmd(self, response):
-        tm = self._expire - self._interval
+        tm = time() # self._expire - self._interval
 #        logging.debug("data:", list(response[5:]))
         self._cmds[self._cmdidx][4](self, response, tm)
         if len(self._cmds) > 0:
             self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
+            if self._cmdidx == 0:
+                self._cycles += 1
         return not (self._cmdidx == 0)
 
     def _process_next_cmd(self):
@@ -300,10 +330,11 @@ class IpmiUdpClient(proto.base.UdpTransport):
             self._sdr_recid = self._sdr_nextid
             process_cmd = self._sdr_idx == self._sdr[2]
         else:
-            process_cmd = False
+            process_cmd = True
         if process_cmd:
             self._sdr_idx = 0
             self._sdr_cached = True
+            self._cmds.extend(self._sdr_cmds)
             self._send = self._process_next_cmd
         else:
             self._send = self._get_sdr_header
@@ -317,8 +348,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
             return True
         size = record[51] & 0x1f
         # FIXME: sensor number is not supported (id_code=0)
-        name = str(record[52:52+size].upper(), 'ascii')
-#        logging.debug("%s: SDR [%s]" % (self._host, name))
+        try:
+            name = str(record[52:52+size].upper(), 'ascii')
+        except:
+            logging.debug("{}: SDR [{}]".format(self, record[52:52+size]))
+            self.disconnect()
+            return False
         x = self._sdrs.get(name, None)
         if not x == None:
             self.sdr = (name, x)
@@ -331,7 +366,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
         mtol = unpack('>H', record[28:30])[0]
         bacc = unpack('>I', record[30:34])[0]
-        self._cmds.append((self.sdr[1], 0x4, 0x2d,
+        self._sdr_cmds.append((self.sdr[1], 0x4, 0x2d,
             # number
             (record[11],),
             # callback function
@@ -379,12 +414,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._sdr[3] = unpack('<H', response[7:9])[0]
 #        logging.debug(("RES: %02x" % self._sdr[3]), response[5:])
 #        logging.debug("%s: got SDR RESERVE <%d> %s" % (self._host, self._sdr[3], self._sdr_cached))
-        if not self._sdr_cached: # and response[6] == 0:
-            self._sdr_recid = 0
-            self._sdr_idx = 0
-            self._send = self._get_sdr_header
-        else:
-            self._send = self._process_next_cmd
+#        if not self._sdr_cached: # and response[6] == 0:
+        self._sdr_recid = 0
+        self._sdr_idx = 0
+        self._send = self._get_sdr_header
+#        else:
+#            self._send = self._process_next_cmd
         return True
 
     def _get_sdr_reserve(self):
@@ -409,6 +444,11 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return rc
 
     def _got_product_id(self, response):
+        if len(response) < 19:
+            logging.warning('{0} got_product_id: response too short [{1}]'.format(self, response))
+            self.disconnect()
+            return False
+
         if (response[8] & 0x80) == 1:
             if (response[12] & 0x02) == 0:
                 self._builtin_sdr = (response[12] & 0x01) == 1
@@ -427,11 +467,15 @@ class IpmiUdpClient(proto.base.UdpTransport):
         # WRND: extend command list with 'session.info' command
 #        self._cmds.extend((('session.info', 0x06, 0x3d, unpack('!5B', b'\xff' + self._sessionid), IpmiUdpClient._cmd_got_sessinfo),))
 
-        if len(self._sdrs):
+        if len(self._sdrs) and not self._sdr_cached:
             self._send = self._get_sdr_info
         else:
+            if len(self._sdr_cmds):
+                self._cmds.extend(self._sdr_cmds)
             self._send = self._process_next_cmd
         self._cmdidx = 0
+
+        #self._cmds.append(('logout', 0x6, 0x3c, self._sessionid, IpmiUdpClient._got_logout))
         return True
 
     def _get_product_id(self):
@@ -465,21 +509,27 @@ class IpmiUdpClient(proto.base.UdpTransport):
             logging.warning("!rmcptag")
             return False
         if data[17] != 0:
-            if data[17] == 2: # and self.logontries:
+            if data[17] == 2 and self._logontries:
                 # if we retried RAKP3 because 
                 # RAKP4 got dropped, BMC can consider it done and we must restart
+                #logging.warning("{0}: RAKP4 got dropped ({1}). Relog.".format(self, self._logontries))
                 self._relog()
                 return False
             if data[17] == 8:
+                #logging.warning("{0}: data[17] == 8. Relog.".format(self))
                 self._relog()
                 return False
-            if data[17] == 15: # and self.logontries:
+            if data[17] == 15 and self._logontries:
                 # ignore 15 value if we are 
                 # retrying.  xCAT did but I can't recall why exactly
                 # TODO(jbjohnso) jog my memory to update the comment
-                return False
+                #logging.warning("{0}: data[17] == 15 ({1}). Relog.".format(self, self._logontries))
+                return True
 
-            logging.warning("%s %s %s %s" % (self._host, self._userid, "err_rakp4", self.rmcp_codes.get(data[17], 'Unrecognized RMCP code %d' % data[17])))
+            logging.warning("(%d) %s %s %s %s" % (self._logontries, self._host, self._userid, "err_rakp4", self.rmcp_codes.get(data[17], 'Unrecognized RMCP code %d' % data[17])))
+            self.disconnect()
+            self._expire -= 50.0
+            self._timeout -= 50.0
             return False
 
         localsid = unpack('<I', pack('4B', *data[20:24]))[0]
@@ -505,6 +555,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _send_rakp3(self):
         self._rmcptag += 1
+#        self._rmcptag &= 0xff
         #rmcptag, then status 0, then two reserved 0s
         payload = [self._rmcptag, 0, 0, 0]
         payload.extend(self._pendingsessionid)
@@ -554,7 +605,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         givenhash = pack('%dB' % len(data[56:]),*data[56:])
         if givenhash != expectedhash:
             logging.warning("%s %s" % (self._host, "Incorrect password provided"))
-            self._relog()
+            self.disconnect()
             return False
 
         #We have now validated that the BMC and client agree on password, time 
@@ -578,6 +629,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _send_rakp1(self):
         self._rmcptag += 1
+#        self._rmcptag &= 0xff
         self._randombytes = self._urandom(16)
         payload = [self._rmcptag, 0, 0, 0]
         payload.extend(self._pendingsessionid)
@@ -588,6 +640,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return self._pack_payload(payload, self.PAYLOAD_RAKP1)
 
     def _got_rmcp_response(self, response):
+        self._recv = None
         if response[16] != self._rmcptag:
             # use rmcp tag to track and reject stale responses
             logging.warning("!rmcptag")
@@ -595,7 +648,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
         if response[17] != 0: # response code
             logging.warning("%s %s %s %s" % (self._host, self._userid, "err_rmcp", self.rmcp_codes.get(response[17], 'Unrecognized RMCP code %d' % response[17])))
             # response[17] == 1 --> incorrect password
-            self._relog()
+            self.disconnect()
+            if response[17] != 1:
+                self._expire -= 50.0
+                self._timeout -= 50.0
             return False
         self._allowedpriv = response[18]
         localsid = unpack('<I', pack('4B', *response[20:24]))[0]
@@ -610,6 +666,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._authtype = 6
         self._localsid += 1
         self._rmcptag += 1
+#        self._rmcptag &= 0xff
         data = [
             self._rmcptag,
             0, # request as much privilege as the channel will give us
@@ -622,6 +679,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             2,0,0,8,1,0,0,0, #AES privacy
             #2,0,0,8,0,0,0,0, #no privacy confalgo
             ])
+        self._recv = None
         return self._pack_payload(data, self.PAYLOAD_RMCPPLUSOPENREQ)
 
     def _got_channel_auth_cap(self, response):
@@ -629,6 +687,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         # command = response[5]
         # code = response[6]
         # data = response[7:]
+        self._recv = None
         if response[6] == 0xcc:
             #tried ipmi 2.0 against a 1.5 which should work, but some bmcs 
             #thought 'reserved' meant 'must be zero'
@@ -653,8 +712,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return True
 
     def _activated_session(self, data):
+        self._logontries = 5
         self._sessionid = data[7+1:7+5]
         self._sequencenumber = unpack("<I", pack("4B", *data[7+5:7+9]))[0]
+        self._recv = None
         self._send = self._req_priv_level
         return True
 
@@ -668,6 +729,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._sessionid = response[7+0:7+4]
         self._authtype = 2
         self._challenge = response[7+4:-1]
+        self._recv = None
         self._send = self._activate_session
         return True
 
@@ -698,6 +760,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
           return self._pack_payload(ipmipayload, payload_type)
         except Exception as e:
           traceback.print_exc(file=sys.stdout)
+#        if self._host == '2a02:6b8:0:1a07:ffff:0:a01:66f':
+#            logging.debug('<{0}: {1} ({2})'.format(self, ipmipayload, self._retries))
 
     def _ipmi15authcode(self, payload, checkremotecode=False):
         if self._authtype == 0:  # Only for things prior to auth in ipmi 1.5, not
@@ -800,7 +864,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
                                     SHA).digest()[:12] #SHA1-96 
                                         #per RFC2404 truncates to 96 bits
                 message.extend(unpack('12B',authcode))
-        self._netpacket = pack('!%dB' % len(message), *message)
+        try:
+            self._netpacket = pack('!%dB' % len(message), *message)
+        except:
+            logging.critical('{0}: pack failed [{1}]'.format(self, message))
+            self.disconnect()
+            return -1
         if self._sequencenumber: # seq number of zero will be left alone as it is
                                  # special, otherwise increment
             self._sequencenumber += 1
@@ -808,29 +877,61 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return self._write(self._netpacket)
 
     def connect(self):
+        logging.debug('Connect: {0}'.format(self))
         if self.connected() and not self.timeouted():
             return True
 
         if not super().connect():
             return False
 
+        self._logontries = 5
+        # TODO: uncomment when expire works
+#        self._sdr_cached = False
+#        self._sdr_cmds = []
         self._initsession()
         return True
 
     def disconnect(self):
-        self._logout()
+        logging.debug('Disconnect: {} send={} recv={} c={} ret={} tb={}'.format(self, self._send, self._recv, self._cycles, self._retries, traceback.format_stack()))
         super().disconnect()
 
-    def _logout(self):
-        if not self._logged:
-            return
-        logging.debug('{0}: logout'.format(self))
-        self._send_ipmi_net_payload(0x6, 0x3c, self._sessionid)
-        self._logged = False
+    def on_timeout(self):
+        super().on_timeout()
+        if self._logged:
+            logging.debug('{0}: decrease timeout'.format(self))
+            self._expire -= 50.0
+            self._timeout -= 50.0
+        return False
+
+    @staticmethod
+    def _got_logout(obj, response, tm):
+        obj._recv = None
+        obj._send = None
+        obj._logged = False
+        logging.debug('Logged out {}'.format(self))
+        return 0
 
     def _relog(self):
-        self.disconnect()
-        return True
+        self._logontries -= 1
+        self._initsession()
+        self._expire += 5.0
+        self._timeout = self._expire + 15.0
+        return False
+
+    def _logout(self):
+        self._recv = None
+        self._send = None
+        if not self._logged:
+            return
+        try:
+            self._send_ipmi_net_payload(0x6, 0x3c, self._sessionid)
+        except:
+            pass
+        self._logged = False
 
     def on_data(self, point, val, tm):
         pass
+
+    def shutdown(self):
+        self._logout()
+        self.disconnect()
