@@ -629,7 +629,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _send_rakp1(self):
         self._rmcptag += 1
-#        self._rmcptag &= 0xff
+        self._rmcptag &= 0xff
         self._randombytes = self._urandom(16)
         payload = [self._rmcptag, 0, 0, 0]
         payload.extend(self._pendingsessionid)
