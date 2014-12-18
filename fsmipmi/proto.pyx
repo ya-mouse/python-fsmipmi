@@ -1,4 +1,4 @@
-import os
+import os, sys
 import logging
 from time import time
 from struct import pack, unpack
@@ -908,7 +908,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         obj._recv = None
         obj._send = None
         obj._logged = False
-        logging.debug('Logged out {}'.format(self))
+        logging.debug('Logged out {}'.format(obj))
         return 0
 
     def _relog(self):

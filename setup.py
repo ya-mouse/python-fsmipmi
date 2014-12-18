@@ -1,4 +1,7 @@
+from Cython.Build import cythonize
+from Cython.Distutils import build_ext
 from setuptools import setup, find_packages
+from distutils.core import Extension
 
 dependency_links = []
 install_requires = []
@@ -12,13 +15,19 @@ with open('requirements.txt') as f:
             continue
         install_requires.append(line)
 
+exts = [
+    Extension('proto', sources=['fsmipmi/proto.pyx']),
+]
+
 setup(
     name='python-fsmipmi',
-    version='0.1',
+    version='0.2',
     description='Finite State Machine IPMI library for Python',
     author='Anton D. Kachalov',
     packages=find_packages(),
     scripts=['fsmitool'],
+    ext_package='fsmipmi',
+    ext_modules=cythonize(exts),
     platforms='any',
     zip_safe=False,
     include_package_data=True,
