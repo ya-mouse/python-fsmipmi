@@ -1,5 +1,5 @@
-from Cython.Build import cythonize
-from Cython.Distutils import build_ext
+#from Cython.Build import cythonize
+#from Cython.Distutils import build_ext
 from setuptools import setup, find_packages
 from distutils.core import Extension
 
@@ -21,13 +21,13 @@ exts = [
 
 setup(
     name='python-fsmipmi',
-    version='0.2',
+    version='0.1',
     description='Finite State Machine IPMI library for Python',
     author='Anton D. Kachalov',
     packages=find_packages(),
     scripts=['fsmitool'],
-    ext_package='fsmipmi',
-    ext_modules=cythonize(exts),
+#    ext_package='fsmipmi',
+#    ext_modules=cythonize(exts),
     platforms='any',
     zip_safe=False,
     include_package_data=True,
