@@ -1,13 +1,11 @@
-import os, sys
+import os
 import logging
 from time import time
 from struct import pack, unpack
 from hashlib import md5
 from random import random
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.hmac import HMAC
-from cryptography.hazmat.primitives.hashes import SHA1
+from Crypto.Cipher import AES
+from Crypto.Hash import HMAC, SHA
 
 from fsmsock import proto
 import traceback
@@ -206,9 +204,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                     logging.warning("{0}: _k1 == None. Relog.".format(self))
                     self._relog()
                     return False
-                h = HMAC(self._k1, SHA1(), default_backend())
-                h.update(data[4:-12])
-                expectedauthcode = h.finalize()[:12]
+                expectedauthcode = HMAC.new(self._k1, data[4:-12], SHA).digest()[:12]
                 if authcode != expectedauthcode:
                     logging.debug("{0}: AUTH {1} != {2}".format(self, expectedauthcode, authcode))
                     return False #BMC failed to assure integrity to us, drop it
@@ -226,10 +222,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 payload = data[16:16 + psize]
                 if encrypted:
                     iv = data[16:32]
-                    decrypter = Cipher(algorithms.AES(self._aeskey), modes.CBC(iv), default_backend()).decryptor()
-                    payload = decrypter.update(pack('%dB' % len(payload[16:]),
-                                                                *payload[16:]))
-                    payload += decrypter.finalize()
+                    decrypter = AES.new(self._aeskey,AES.MODE_CBC,iv)
+                    payload = decrypter.decrypt(pack('%dB' % len(payload[16:]),
+                                                       *payload[16:]))
             else:
                 logging.warning("{0}: wrong packet, ptype={1:>#8b}".format(self._host, data[5]))
                 return False
@@ -544,9 +539,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         hmacdata = self._randombytes+\
             pack("<4B", *self._pendingsessionid)+\
             self._remoteguid
-        h = HMAC(self._sik, SHA1(), default_backend())
-        h.update(hmacdata)
-        expectedauthcode = h.finalize()[:12]
+        expectedauthcode = HMAC.new(self._sik, hmacdata, SHA).digest()[:12]
         authcode = pack('%dB' % len(data[24:]), *data[24:])
         if authcode != expectedauthcode:
             logging.warning('Invalid RAKP4 integrity code (wrong Kg?)')
@@ -570,9 +563,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             pack("<I", self._localsid)+\
             pack("2B", self._privlevel, len(self._userid))+\
             self._userid
-        h = HMAC(self._passwd, SHA1(), default_backend())
-        h.update(hmacdata)
-        authcode = h.finalize()
+        authcode = HMAC.new(self._passwd, hmacdata, SHA).digest()
         payload.extend(unpack('%dB' % len(authcode), authcode))
 
         return self._pack_payload(payload, self.PAYLOAD_RAKP3)
@@ -610,9 +601,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             self._randombytes + self._remoterandombytes + self._remoteguid+\
             pack('2B', self._privlevel, userlen) +\
             self._userid
-        h = HMAC(self._passwd, SHA1(), default_backend())
-        h.update(hmacdata)
-        expectedhash = h.finalize()
+        expectedhash = HMAC.new(self._passwd, hmacdata, SHA).digest()
         givenhash = pack('%dB' % len(data[56:]),*data[56:])
         if givenhash != expectedhash:
             logging.warning("%s %s" % (self._host, "Incorrect password provided"))
@@ -622,17 +611,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
         #We have now validated that the BMC and client agree on password, time 
         #to store the keys
 
-        h = HMAC(self._kg, SHA1(), default_backend())
-        h.update(self._randombytes + self._remoterandombytes +
-                 pack('2B', self._privlevel, userlen)+
-                 self._userid)
-        self._sik = h.finalize()
-        h = HMAC(self._sik, SHA1(), default_backend())
-        h.update(b'\x01'*20)
-        self._k1 = h.finalize()
-        h = HMAC(self._sik, SHA1(), default_backend())
-        h.update(b'\x02'*20)
-        self._k2 = h.finalize()
+        self._sik = HMAC.new(self._kg,
+                             self._randombytes + self._remoterandombytes +
+                             pack('2B', self._privlevel, userlen)+
+                             self._userid, SHA).digest()
+        self._k1 = HMAC.new(self._sik, b'\x01'*20, SHA).digest()
+        self._k2 = HMAC.new(self._sik, b'\x02'*20, SHA).digest()
         self._aeskey = self._k2[0:16]
 
         self._send = self._send_rakp3
@@ -854,9 +838,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
                     needpad = 16 - needpad
                 payload.extend(self._padval[0:needpad])
                 payload.append(needpad)
-                crypter = Cipher(algorithms.AES(self._aeskey), modes.CBC(iv), default_backend()).encryptor()
-                crypted = crypter.update(pack('%dB' % len(payload),
-                                               *payload)) + crypter.finalize()
+                crypter = AES.new(self._aeskey, AES.MODE_CBC, iv)
+                crypted = crypter.encrypt(pack('%dB' % len(payload),
+                                               *payload))
                 crypted = unpack('%dB' % len(crypted), crypted)
                 message.extend(crypted)
             else: #no confidetiality algorithm
@@ -874,10 +858,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 message.append(7) #reserved, 7 is the required value for the 
                                   #specification followed
                 integdata = message[4:]
-                h = HMAC(self._k1, SHA1(), default_backend())
-                h.update(pack('%dB' % len(integdata),
-                                         *integdata))
-                authcode = h.finalize()[:12] #SHA1-96 
+                authcode = HMAC.new(self._k1,
+                                    pack('%dB' % len(integdata),
+                                         *integdata),
+                                    SHA).digest()[:12] #SHA1-96 
                                         #per RFC2404 truncates to 96 bits
                 message.extend(unpack('12B',authcode))
         try:
