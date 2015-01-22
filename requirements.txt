@@ -1,3 +1,3 @@
-pycrypto>=2.6.1
+cryptography>=0.7.2
 #cython >= 0.21
 https://github.com/ya-mouse/python-fsmsock/archive/master.zip#egg=python-fsmsock
