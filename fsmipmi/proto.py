@@ -170,7 +170,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 return False
             if self._sessionid != data[9:13]:
                 logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
-                return False
+                self._initsession()
+                return True
             if data[4] == 0x02:
                 authcode = data[13:29]
                 sz = data[30]+30
@@ -583,7 +584,8 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
             if data[17] == 2: # invalid sessionid 99% of the time means a retry
                               # scenario invalidated an in-flight transaction
-                return False
+                self._initsession()
+                return True
 
             logging.warning('%s %s %s %s' % (self._host, self._userid, "err_rakp2", self.rmcp_codes.get(data[17], 'Unrecognized RMCP code %d' % data[17])))
             # data[17] === 13 -> incorrect password
