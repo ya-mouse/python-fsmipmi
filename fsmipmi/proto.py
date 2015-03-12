@@ -700,6 +700,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
         # TODO: check IPMI error for (netfn, command)
 
         self._currentchannel = response[7]
+        if len(response) < 11:
+            logging.critical("Too short response: {}".format(response))
+            return False
         if response[8] & 0b10000000 and response[10] & 0b10: #ipmi 2.0 support
             self._ipmiversion = 2.0
         if self._ipmiversion == 1.5:
