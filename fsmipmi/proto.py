@@ -129,7 +129,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
         self._cmdidx = 0
-        self._send = self._get_channel_auth_cap
+        self._send = self._presence_ping
         self._recv = None
         self._oldpayload = None
         self._unord = False
