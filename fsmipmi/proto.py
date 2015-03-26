@@ -129,7 +129,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
         self._cmdidx = 0
-        self._send = self._presence_ping
+        self._send = self._get_channel_auth_cap
         self._recv = None
         self._oldpayload = None
         self._unord = False
@@ -173,7 +173,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 # mutual authentication reject it. If this causes 
                 # legitimate issues, it's the vendor's fault
                 return False
-            if self._sessionid != data[9:13]:
+            if self._sessionid != data[9:13] and self._sessionid != b'\x00'*4:
                 logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
                 self._initsession()
                 return True
