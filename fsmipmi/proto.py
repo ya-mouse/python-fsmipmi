@@ -120,7 +120,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._seqlun = 0
         self._sequencenumber = 0
         self._ipmiversion = 1.5
-        self._ipmi15only = False
+        self._ipmi15only = True
         self._ver = 0
         self._mfg = -1
         self._prod = -1
@@ -129,7 +129,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                             # be 0x81 through 0x8d.  We'll stick with 0x81 for now,
                             # do not forsee a reason to adjust
         self._cmdidx = 0
-        self._send = self._get_channel_auth_cap
+        self._send = self._presence_ping
         self._recv = None
         self._oldpayload = None
         self._unord = False
@@ -154,11 +154,16 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
         self._state = self.READY
 
-        if not (data[0] == 0x06 and data[2] == 0xff and data[3] == 0x07):
+        is_asf = False
+        if data[0] == 0x06 and data[2] == 0xff and data[3] == 0x06:
+            payload = data[5:]
+            is_asf = True
+        elif not (data[0] == 0x06 and data[2] == 0xff and data[3] == 0x07):
             # not valid IPMI
             logging.warning("{0}: Not valid IPMI".format(self._host))
             return False
-        if data[4] == 0x00 or data[4] == 0x02:
+
+        if not is_asf and (data[4] == 0x00 or data[4] == 0x02):
             # IPMI v1.5
             seqnumber = unpack('<I', data[5:9])[0]
             # check remote seqnumber
@@ -181,7 +186,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 sz = data[13]+14
                 payload = bytes(unpack('!%dB' % data[13], data[14:sz]))
             # TODO: check ipmi15authcode
-        elif data[4] == 0x06:
+        elif not is_asf and data[4] == 0x06:
             # IPMI v2.0
             ptype = data[5] & 0b00111111
             if ptype == self.PAYLOAD_RMCPPLUSOPENRESPONSE:
@@ -753,6 +758,19 @@ class IpmiUdpClient(proto.base.UdpTransport):
             return self._send_ipmi_net_payload(0x6, 0x38, (0x0e, self._privlevel))
         else:
             return self._send_ipmi_net_payload(0x6, 0x38, (0x8e, self._privlevel))
+
+    def _presence_ping(self):
+        self._recv = self._presence_pong
+        message = [0x6, 0, 0xff, 0x06] #constant RMCP header for ASF
+        message.extend([0, 0, 0x11, 0xbe, 0x80, 0, 0, 0])
+        if self._sequencenumber: # seq number of zero will be left alone as it is
+                                 # special, otherwise increment
+            self._sequencenumber += 1
+        return self._write(bytes(message))
+
+    def _presence_pong(self, response):
+        self._send = self._get_channel_auth_cap
+        return True
 
     def _send_ipmi_net_payload(self, netfn, command, data = ()):
         ipmipayload = self._make_ipmi_payload(netfn, command, data)
