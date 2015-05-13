@@ -723,6 +723,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def _activated_session(self, data):
         self._logontries = 5
+        # Check for completion code
+        if data[6] != 0:
+            self.disconnect()
+            return False
         self._sessionid = data[7+1:7+5]
         self._sequencenumber = unpack("<I", pack("4B", *data[7+5:7+9]))[0]
         self._recv = None
