@@ -279,9 +279,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
     sdr_types = ( 0x01, 0x04, 0x08 )
 
     def _got_next_cmd(self, response):
-        tm = time() # self._expire - self._interval
 #        logging.debug("data:", list(response[5:]))
-        self._cmds[self._cmdidx][4](self, response, tm)
+        if response[6] == 0:
+            tm = time() # self._expire - self._interval
+            self._cmds[self._cmdidx][4](self, response, tm)
         if len(self._cmds) > 0:
             self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
             if self._cmdidx == 0:
