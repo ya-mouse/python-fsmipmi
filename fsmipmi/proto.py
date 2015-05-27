@@ -471,8 +471,11 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return self._send_ipmi_net_payload(self._sdr[0], self._sdr[1], payload)
 
     def _got_sdr_header(self, header):
-#        if header[6] != 0:
-#            return True
+        if header[6] != 0 or len(header) < 14:
+            logging.critical('{}: _got_sdr_header: {}'.format(self._host, self._error(header)))
+            self._send = self._process_next_cmd
+#            self.disconnect()
+            return True
 #        logging.debug("%s: got SDR HEADER <%x>" % (self._host, header[12]))
         if header[12] != 0x01: # SDR_RECORD_TYPE_FULL_SENSOR
             self._sdr_nextid = unpack('<H', header[7:9])[0]
@@ -799,7 +802,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._logontries = 5
         # Check for completion code
         if data[6] != 0:
-            logging.critical('Session Acivate: ' + self._error(data))
+            logging.critical('{}: Session Acivate: {}'.format(self._host, self._error(data)))
             self.disconnect()
             return False
         self._sessionid = data[7+1:7+5]
