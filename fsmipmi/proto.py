@@ -134,6 +134,51 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._oldpayload = None
         self._unord = False
 
+    def _error(self, data):
+        if len(data) < 7:
+            return 'Short answer'
+
+        netfn = data[1] >> 2
+        cmd   = data[5]
+        code  = data[6]
+        command_completion_codes = {
+            (7, 0x39): {
+                0x81: "Invalid user name",
+                0x82: "Null user disabled",
+            },
+            (7, 0x3a): {
+                0x81: "No available login slots",
+                0x82: "No available login slots for requested user",
+                0x83: "No slot available with requested privilege level",
+                0x84: "Session sequence number out of range",
+                0x85: "Invalid session ID",
+                0x86: ("Requested privilege level exceeds requested user permissions "
+                       "on this channel"),
+            },
+            (7, 0x3b): { # Set session privilege level
+                0x80: "User is not allowed requested privilege level",
+                0x81: "Requested privilege level is not allowed over this channel",
+                0x82: "Cannot disable user level authentication",
+            },
+            (1, 8): { # set system boot options
+                0x80: "Parameter not supported",
+                0x81: "Attempt to set set 'set in progress' when not 'set complete'",
+                0x82: "Attempt to write read-only parameter",
+            },
+            (7, 0x48): { # activate payload
+                0x80: "Payload already active on another session",
+                0x81: "Payload is disabled",
+                0x82: "Payload activation limit reached",
+                0x83: "Cannot activate payload with encryption",
+                0x84: "Cannot activate payload without encryption",
+            },
+            (6, 0x47): { # set user password
+                0x80: "Password test failed. Password does not match stored value",
+                0x81: "Password test failed. Wrong password size was used"
+            },
+        }
+        return command_completion_codes.get((netfn, cmd), {}).get(code, 'Unknown code: %02x' % code)
+
     def send_buf(self):
 #        logging.debug("SEND BUF %s", self._send)
         if self._send != None:
@@ -177,9 +222,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
                 self._initsession()
                 return True
-            if data[4] == 0x02:
+            if data[4] == 0x02: # we have authcode in this ipmi 1.5 packet
                 authcode = data[13:29]
-                sz = data[30]+30
+                sz = data[29]+30
                 payload = bytes(unpack('!%dB' % data[29], data[30:sz]))
             else:
                 authcode = False
@@ -726,6 +771,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._logontries = 5
         # Check for completion code
         if data[6] != 0:
+            logging.critical('Session Acivate: ' + self._error(data))
             self.disconnect()
             return False
         self._sessionid = data[7+1:7+5]
