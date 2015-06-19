@@ -420,11 +420,12 @@ class IpmiUdpClient(proto.base.UdpTransport):
             self._send = self._get_sdr_header
 
     def _got_sdr_record(self, record):
-        self._next_sdr_or_cmd()
+        #self._next_sdr_or_cmd()
 #        if record[6] != 0:
 #            return True
 #        logging.debug("%s: SDR <%d> type=%x" % (self._host, len(record), record[17]))
         if len(record) < 58 or not record[17] in self.sdr_types:
+            self._next_sdr_or_cmd()
             return True
         size = record[51] & 0x1f
         # FIXME: sensor number is not supported (id_code=0)
@@ -438,6 +439,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         if not x == None:
             self.sdr = (name, x)
         else:
+            self._next_sdr_or_cmd()
             return True
 #        logging.debug("REC: owner_id/target=%02x lun=%02x num=%02x unit=%02x linear=%02x mtol=%04x bacc=%x" % (record[9], record[10], record[11], record[24], record[27], unpack('<H', record[28:30])[0], unpack('<I', record[30:34])[0]), record[23:])
 
@@ -463,6 +465,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             tos32(((bacc & 0xf0) >> 4), 4),
             # __TO_B_EXP
             tos32((bacc & 0xf), 4)))
+        self._next_sdr_or_cmd()
         return True
 
     def _get_sdr_record(self):
