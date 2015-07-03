@@ -358,7 +358,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
             try:
                 self._cmds[self._cmdidx][4](self, response, tm)
             except Exception as e:
-                logging.critical('Unexpected error on {} / {}: {} {}. Text: {}'.format(self._host, self._tag[0], self._cmds[self._cmdidx], response, e))
+                logging.critical('{} / {}: {} {}. Error while cmd executing: {}'.format(self._host, self._tag[0], self._cmds[self._cmdidx], response, e))
         if len(self._cmds) > 0:
             self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
             if self._cmdidx == 0:
