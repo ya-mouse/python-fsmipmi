@@ -215,8 +215,9 @@ class IpmiUdpClient(proto.base.UdpTransport):
 
     def on_unorder(self, data):
         if self._oldpayload:
-            logging.debug('{4} OLDLOAD: netfn={0:x} cmd={1:x} code={2:x} {3}'.format(self._oldpayload[1] >> 2, self._oldpayload[5], self._oldpayload[6], self._oldpayload, self))
-        logging.debug('{2} UNORDER: {1} {0}'.format(data, self._aeskey, self))
+            pass
+            #logging.debug('{4} OLDLOAD: netfn={0:x} cmd={1:x} code={2:x} {3}'.format(self._oldpayload[1] >> 2, self._oldpayload[5], self._oldpayload[6], self._oldpayload, self))
+        #logging.debug('{2} UNORDER: {1} {0}'.format(data, self._aeskey, self))
         self._unord = True
         return self.process_data(data)
 
@@ -247,7 +248,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
                 # legitimate issues, it's the vendor's fault
                 return False
             if self._sessionid != data[9:13] and self._sessionid != b'\x00'*4:
-                logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
+                #logging.debug("{0}: session {1} != {2}".format(self, self._sessionid, data[9:13]))
                 self._initsession()
                 return True
             if data[4] == 0x02: # we have authcode in this ipmi 1.5 packet
@@ -985,7 +986,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return self._write(self._netpacket)
 
     def connect(self):
-        logging.debug('Connect: {0}'.format(self))
+        #logging.debug('Connect: {0}'.format(self))
         if self.connected() and not self.timeouted():
             return True
 
@@ -1000,7 +1001,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         return True
 
     def disconnect(self):
-        logging.debug('Disconnect: {} send={} recv={} c={} ret={} tb={}'.format(self, self._send, self._recv, self._cycles, self._retries, traceback.format_stack()))
+        #logging.debug('Disconnect: {} send={} recv={} c={} ret={} tb={}'.format(self, self._send, self._recv, self._cycles, self._retries, traceback.format_stack()))
         super().disconnect()
 
     def on_timeout(self):
