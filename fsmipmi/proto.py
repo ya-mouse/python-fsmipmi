@@ -424,7 +424,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
 #        if record[6] != 0:
 #            return True
 #        logging.debug("%s: SDR <%d> type=%x" % (self._host, len(record), record[17]))
-        if len(record) < 58 or not record[17] in self.sdr_types:
+        if len(record) < 55 or not record[17] in self.sdr_types:
             self._next_sdr_or_cmd()
             return True
         size = record[51] & 0x1f
