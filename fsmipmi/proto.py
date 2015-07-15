@@ -356,7 +356,10 @@ class IpmiUdpClient(proto.base.UdpTransport):
 #        logging.debug("data:", list(response[5:]))
         if response[6] == 0:
             tm = time() # self._expire - self._interval
-            self._cmds[self._cmdidx][4](self, response, tm)
+            try:
+                self._cmds[self._cmdidx][4](self, response, tm)
+            except Exception as e:
+                logging.critical('{}: {} {} {}. Error while cmd executing: {}'.format(self._host, self._tag[0], self._cmds[self._cmdidx], response, e))
         if len(self._cmds) > 0:
             self._cmdidx = (self._cmdidx + 1) % len(self._cmds)
             if self._cmdidx == 0:
