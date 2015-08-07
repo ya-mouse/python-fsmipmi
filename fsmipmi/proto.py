@@ -85,6 +85,7 @@ class IpmiUdpClient(proto.base.UdpTransport):
         self._kg = self._passwd
         self._send = None
         self._recv = None
+        self._logged = False
         self._padval = tuple(range(1, 16))
         self._cmdidx = 0
         self._cmds = list(cmds)
